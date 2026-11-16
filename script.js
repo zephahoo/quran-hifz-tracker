@@ -1,4 +1,3 @@
-
 const PLAN_PAGES = { full: 600, light: 300 };
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
