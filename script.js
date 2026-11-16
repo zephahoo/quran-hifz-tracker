@@ -5,7 +5,9 @@ const plans = {
     intensive: { name: 'Double Pass (60 Juz)', totalPages: 1200 }
 };
 
+let currentProfile = null;
 let selectedPlan = 'full';
+let customSettings = { totalPages: 600, targetDate: '2027-02-08' };
 let completedDays = [];
 let activeWeek = 1;
 let currentDate = new Date();
@@ -22,27 +24,83 @@ const quotes = [
 ];
 
 function init() {
-    loadProgress();
     setInterval(() => {
         currentDate = new Date();
-        renderHeader();
+        if (currentProfile) renderHeader();
     }, 1000);
+    
+    const lastProfile = localStorage.getItem('hifz_last_profile');
+    if (lastProfile) {
+        selectProfile(lastProfile);
+    } else {
+        renderProfileScreen();
+    }
+}
+
+function getProfiles() {
+    return JSON.parse(localStorage.getItem('hifz_profiles') || '[]');
+}
+
+function saveProfile(name) {
+    const profiles = getProfiles();
+    if (!profiles.includes(name)) {
+        profiles.push(name);
+        localStorage.setItem('hifz_profiles', JSON.stringify(profiles));
+    }
+}
+
+function selectProfile(name) {
+    currentProfile = name;
+    localStorage.setItem('hifz_last_profile', name);
+    loadProgress();
     renderApp();
 }
 
+function logout() {
+    currentProfile = null;
+    localStorage.removeItem('hifz_last_profile');
+    renderProfileScreen();
+}
+
+function addNewProfile() {
+    const input = document.getElementById('new-profile-name');
+    const name = input.value.trim();
+    if (name) {
+        saveProfile(name);
+        selectProfile(name);
+    } else {
+        alert('Please enter a name first!');
+    }
+}
+
+function getTargetDate() {
+    if (selectedPlan === 'custom') {
+        const d = new Date(customSettings.targetDate + "T00:00:00");
+        return isNaN(d.getTime()) ? ramadanDate : d;
+    }
+    return ramadanDate;
+}
+
 function loadProgress() {
-    const saved = localStorage.getItem(`hifzProgress_${selectedPlan}`);
-    const msPerDay = 1000 * 60 * 60 * 24;
-    const daysLeft = Math.max(0, Math.ceil((ramadanDate.getTime() - currentDate.getTime()) / msPerDay));
-    const totalTasks = daysLeft || 90;
+    const saved = localStorage.getItem(`hifz_data_${currentProfile}`);
     
     if (saved) {
-        completedDays = JSON.parse(saved);
-        if (completedDays.length !== totalTasks) {
-            completedDays = Array(totalTasks).fill(false);
-        }
+        const data = JSON.parse(saved);
+        selectedPlan = data.selectedPlan || 'full';
+        customSettings = data.customSettings || { totalPages: 600, targetDate: '2027-02-08' };
+        completedDays = data.completedDays || [];
     } else {
-        completedDays = Array(totalTasks).fill(false);
+        selectedPlan = 'full';
+        customSettings = { totalPages: 600, targetDate: '2027-02-08' };
+        completedDays = [];
+    }
+
+    const target = getTargetDate();
+    const msPerDay = 1000 * 60 * 60 * 24;
+    const daysLeft = Math.max(1, Math.ceil((target.getTime() - currentDate.getTime()) / msPerDay));
+    
+    if (completedDays.length !== daysLeft) {
+        completedDays = Array.from({length: daysLeft}, (_, i) => completedDays[i] || false);
     }
     
     const firstUncompleted = completedDays.findIndex(d => !d);
@@ -50,7 +108,8 @@ function loadProgress() {
 }
 
 function saveProgress() {
-    localStorage.setItem(`hifzProgress_${selectedPlan}`, JSON.stringify(completedDays));
+    const data = { selectedPlan, customSettings, completedDays };
+    localStorage.setItem(`hifz_data_${currentProfile}`, JSON.stringify(data));
     renderApp();
 }
 
@@ -61,8 +120,28 @@ function toggleDay(index) {
 
 function changePlan(e) {
     selectedPlan = e.target.value;
-    loadProgress();
-    renderApp();
+    
+    // Resize array if date changed between fixed and custom
+    const target = getTargetDate();
+    const daysLeft = Math.max(1, Math.ceil((target.getTime() - currentDate.getTime()) / (1000 * 60 * 60 * 24)));
+    completedDays = Array.from({length: daysLeft}, (_, i) => completedDays[i] || false);
+    
+    saveProgress();
+}
+
+function updateCustomSettings() {
+    const pages = parseInt(document.getElementById('custom-pages').value) || 600;
+    const date = document.getElementById('custom-date').value || '2027-02-08';
+    
+    customSettings.totalPages = pages;
+    customSettings.targetDate = date;
+    
+    // Resize array based on new custom date
+    const target = getTargetDate();
+    const daysLeft = Math.max(1, Math.ceil((target.getTime() - currentDate.getTime()) / (1000 * 60 * 60 * 24)));
+    completedDays = Array.from({length: daysLeft}, (_, i) => completedDays[i] || false);
+    
+    saveProgress();
 }
 
 function toggleWeek(weekNum) {
@@ -71,10 +150,13 @@ function toggleWeek(weekNum) {
 }
 
 function getStats() {
+    const target = getTargetDate();
     const msPerDay = 1000 * 60 * 60 * 24;
-    const daysLeft = Math.max(0, Math.ceil((ramadanDate.getTime() - currentDate.getTime()) / msPerDay));
-    const totalTasks = daysLeft || 90;
-    const pagesPerDay = Math.ceil(plans[selectedPlan].totalPages / (daysLeft || 1));
+    const daysLeft = Math.max(1, Math.ceil((target.getTime() - currentDate.getTime()) / msPerDay));
+    const totalTasks = daysLeft;
+    
+    const totalPgs = selectedPlan === 'custom' ? customSettings.totalPages : plans[selectedPlan].totalPages;
+    const pagesPerDay = Math.ceil(totalPgs / (daysLeft || 1));
     
     let totalPoints = 0;
     const weeks = [];
@@ -111,11 +193,47 @@ function renderHeader() {
         timeZone: 'Asia/Singapore', day: 'numeric', month: 'long', year: 'numeric'
     });
     
+    const targetName = selectedPlan === 'custom' ? 'Target Date' : 'Ramadan (Estimated: 8 Feb 2027)';
     headerEl.innerHTML = `
         <div>${formatterGregorian.format(currentDate)}</div>
         <div>${formatterHijri.format(currentDate)} AH</div>
-        <div class="countdown">${getStats().daysLeft} Days until Ramadan (Estimated: 8 Feb 2027)</div>
+        <div class="countdown">${getStats().daysLeft} Days until ${targetName}</div>
     `;
+}
+
+function renderProfileScreen() {
+    const app = document.getElementById('app');
+    const profiles = getProfiles();
+    
+    let html = `
+        <div class="container" style="max-width: 450px; margin-top: 80px; text-align: center;">
+            <h1 style="margin-bottom: 10px; font-size: 2.5rem;">📖 Hifz Tracker</h1>
+            <p style="color: #94a3b8; margin-bottom: 40px;">Select your profile to continue</p>
+            
+            <div class="profile-card">
+    `;
+    
+    if (profiles.length > 0) {
+        html += `<h3 style="margin-top: 0; margin-bottom: 20px; font-size: 1.2rem;">Welcome Back</h3>
+                 <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 30px;">`;
+        profiles.forEach(p => {
+            const safeName = p.replace(/'/g, "\'");
+            html += `<button class="btn-profile" onclick="selectProfile('${safeName}')">${p}</button>`;
+        });
+        html += `</div>
+                 <div style="width: 100%; height: 1px; background-color: #334155; margin-bottom: 30px;"></div>`;
+    }
+    
+    html += `
+                <h3 style="margin-top: 0; margin-bottom: 20px; font-size: 1.2rem;">New User</h3>
+                <div>
+                    <input type="text" id="new-profile-name" class="input-field" placeholder="Enter your name" onkeypress="if(event.key === 'Enter') addNewProfile()">
+                    <button class="btn-primary" onclick="addNewProfile()" style="width: 100%;">Create & Start Tracking</button>
+                </div>
+            </div>
+        </div>
+    `;
+    app.innerHTML = html;
 }
 
 function renderApp() {
@@ -125,6 +243,11 @@ function renderApp() {
     
     let html = `
         <div class="container">
+            <div class="header-top">
+                <div style="color: #94a3b8; font-weight: bold;">Salam, <span style="color: #f8fafc;">${currentProfile}</span> 👋</div>
+                <button onclick="logout()" class="btn-logout">Switch Profile</button>
+            </div>
+            
             <div class="header">
                 <div>
                     <h1>📖 Pre-Ramadan Hifz</h1>
@@ -154,7 +277,19 @@ function renderApp() {
                             ${plan.name} — Target: ${Math.ceil(plan.totalPages / (stats.daysLeft || 1))} Pages/Day
                         </option>
                     `).join('')}
+                    <option value="custom" ${selectedPlan === 'custom' ? 'selected' : ''}>
+                        Custom Target...
+                    </option>
                 </select>
+                
+                ${selectedPlan === 'custom' ? `
+                    <div class="custom-setup">
+                        <label>Total Pages to Revise:</label>
+                        <input type="number" id="custom-pages" value="${customSettings.totalPages}" onchange="updateCustomSettings()" min="1">
+                        <label>Target Date (Deadline):</label>
+                        <input type="date" id="custom-date" value="${customSettings.targetDate}" onchange="updateCustomSettings()">
+                    </div>
+                ` : ''}
             </div>
             
             <h3>Weekly Check-ins</h3>
