@@ -23,21 +23,49 @@ function init() {
     }, 1000);
     
     const lastProfile = localStorage.getItem('hifz_last_profile');
-    if (lastProfile) selectProfile(lastProfile);
-    else renderProfileScreen();
+    if (lastProfile) {
+        selectProfile(lastProfile);
+    } else {
+        renderProfileScreen();
+    }
 }
 
 // --- PROFILE & DATA MANAGEMENT ---
 function getProfiles() { return JSON.parse(localStorage.getItem('hifz_profiles') || '[]'); }
+
 function saveProfile(name) {
     const profiles = getProfiles();
     if (!profiles.includes(name)) { profiles.push(name); localStorage.setItem('hifz_profiles', JSON.stringify(profiles)); }
+}
+
+function deleteProfile(name, event) {
+    event.stopPropagation();
+    if(confirm(`Are you sure you want to delete the profile "${name}"? All data will be lost.`)) {
+        let profiles = getProfiles();
+        profiles = profiles.filter(p => p !== name);
+        localStorage.setItem('hifz_profiles', JSON.stringify(profiles));
+        localStorage.removeItem(`hifz_data_${name}`);
+        if (currentProfile === name) {
+            currentProfile = null;
+            localStorage.removeItem('hifz_last_profile');
+        }
+        renderProfileScreen();
+    }
+}
+
+function autoSetWeek() {
+    const proj = getActiveProject();
+    if (proj) {
+        const firstUncompleted = proj.completedDays.findIndex(d => !d);
+        activeWeek = firstUncompleted === -1 ? 1 : Math.floor(firstUncompleted / 7) + 1;
+    }
 }
 
 function selectProfile(name) {
     currentProfile = name;
     localStorage.setItem('hifz_last_profile', name);
     loadUserData();
+    autoSetWeek();
     renderApp();
 }
 
@@ -60,7 +88,7 @@ function loadUserData() {
         try {
             let parsed = JSON.parse(saved);
             if (parsed.currentJourney) userData = parsed;
-            else userData = migrateOldData(parsed); // Migrate legacy structure
+            else userData = migrateOldData(parsed); 
         } catch (e) { userData = createDefaultUserData(); }
     } else {
         userData = createDefaultUserData();
@@ -118,11 +146,13 @@ function createProjectObject(name, durationType, customDateStr, planType, custom
 
 function setJourney(journey) {
     userData.currentJourney = journey;
+    autoSetWeek();
     saveUserData();
 }
 
 function switchProject(projId) {
     userData[userData.currentJourney].activeProjectId = projId;
+    autoSetWeek();
     saveUserData();
 }
 
@@ -131,6 +161,17 @@ function toggleDay(index) {
     const pid = userData[j].activeProjectId;
     userData[j].projects[pid].completedDays[index] = !userData[j].projects[pid].completedDays[index];
     saveUserData();
+}
+
+function resetWeek(startIndex, length) {
+    if(confirm('Are you sure you want to reset the progress for this week?')) {
+        const j = userData.currentJourney;
+        const pid = userData[j].activeProjectId;
+        for(let i=0; i<length; i++) {
+            userData[j].projects[pid].completedDays[startIndex + i] = false;
+        }
+        saveUserData();
+    }
 }
 
 function toggleWeek(weekNum) {
@@ -147,16 +188,10 @@ function getActiveProject() {
 function getStats(project) {
     if (!project) return null;
     const target = new Date(project.targetDate);
-    const start = new Date(project.startDate);
     const msPerDay = 1000 * 60 * 60 * 24;
     
-    // Total physical checkboxes created for this project
     const totalTasks = project.completedDays.length;
-    
-    // Days remaining from TODAY
     const daysLeftFromToday = Math.max(0, Math.ceil((target.getTime() - currentDate.getTime()) / msPerDay));
-    
-    // To ensure they always know what pace they should be at, pagesPerDay is calculated from start
     const pagesPerDay = Math.ceil(project.totalPages / (totalTasks || 1));
     
     let totalPoints = 0;
@@ -205,7 +240,14 @@ function renderProfileScreen() {
     if (profiles.length > 0) {
         html += `<h3 style="margin-top: 0; margin-bottom: 20px; font-size: 1.2rem;">Welcome Back</h3>
                  <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 30px;">`;
-        profiles.forEach(p => { html += `<button class="btn-profile" onclick="selectProfile('${p.replace(/'/g, "\'")}')">${p}</button>`; });
+        profiles.forEach(p => { 
+            const safeName = p.replace(/'/g, "\\'");
+            html += `
+            <div class="profile-row">
+                <button class="btn-profile" style="flex: 1;" onclick="selectProfile('${safeName}')">${p}</button>
+                <button class="btn-profile-delete" onclick="deleteProfile('${safeName}', event)" title="Delete Profile">✖</button>
+            </div>`; 
+        });
         html += `</div><div style="width: 100%; height: 1px; background-color: #334155; margin-bottom: 30px;"></div>`;
     }
     html += `<h3 style="margin-top: 0; margin-bottom: 20px; font-size: 1.2rem;">New User</h3>
@@ -221,12 +263,6 @@ function renderApp() {
     const proj = getActiveProject();
     const stats = getStats(proj);
     const quote = quotes[currentDate.getDay() % quotes.length];
-    
-    // Auto-expand first uncompleted week if proj exists
-    if (proj) {
-        const firstUncompleted = proj.completedDays.findIndex(d => !d);
-        activeWeek = firstUncompleted === -1 ? 1 : Math.floor(firstUncompleted / 7) + 1;
-    }
 
     let html = `
         <div class="container">
@@ -315,6 +351,10 @@ function renderApp() {
                 `;
             });
             if (week.isPerfect) html += `<div class="bonus-points">+50 Bonus Points for a Perfect Week! 🌟</div>`;
+            
+            // NEW: Reset Week Button
+            html += `<button class="btn-reset-week" onclick="resetWeek(${week.startIndex}, ${week.days.length})">↺ Reset Week</button>`;
+            
             html += `</div>`;
         }
         html += `</div>`;
@@ -396,6 +436,7 @@ function saveNewProject() {
     
     userData[j].projects[newProj.id] = newProj;
     userData[j].activeProjectId = newProj.id;
+    autoSetWeek();
     saveUserData();
 }
 
